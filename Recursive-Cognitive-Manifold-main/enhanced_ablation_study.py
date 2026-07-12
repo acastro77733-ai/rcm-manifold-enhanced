@@ -22,6 +22,7 @@ Analysis:
 
 import copy
 from dataclasses import dataclass, asdict, field
+import random
 import types
 from datetime import datetime, timezone
 import json
@@ -114,6 +115,54 @@ def generate_trial_inputs(graph_size: int, seed: int, scenario: str, n_steps: in
         inputs.append({node_id: value.copy() for node_id, value in input_dict.items()})
 
     return inputs
+
+
+def build_experiment_plan(graph_size: int, seed: int, scenario: str, n_steps: int, state_dim: int) -> Dict[str, object]:
+    """Construct a scientifically valid plan with separate RNG streams and immutable sequences."""
+    graph_seed = seed + 100
+    training_seed = seed + 200
+    noise_seed = seed + 300
+    evaluation_seed = seed + 400
+    graph_rng = np.random.default_rng(graph_seed)
+    training_rng = np.random.default_rng(training_seed)
+    noise_rng = np.random.default_rng(noise_seed)
+    evaluation_rng = np.random.default_rng(evaluation_seed)
+
+    graph_vertices = graph_rng.normal(size=(graph_size, 2))
+    training_inputs = generate_trial_inputs(graph_size, training_seed, scenario, n_steps, state_dim)
+    noise_inputs = generate_trial_inputs(graph_size, noise_seed, scenario, n_steps, state_dim)
+    evaluation_inputs = generate_trial_inputs(graph_size, evaluation_seed, scenario, n_steps, state_dim)
+
+    # Make evaluation and training inputs immutable by copying values deeply.
+    training_inputs = [{node_id: value.copy() for node_id, value in step.items()} for step in training_inputs]
+    noise_inputs = [{node_id: value.copy() for node_id, value in step.items()} for step in noise_inputs]
+    evaluation_inputs = [{node_id: value.copy() for node_id, value in step.items()} for step in evaluation_inputs]
+
+    return {
+        "graph_vertices": graph_vertices,
+        "rng_streams": {
+            "graph_seed": graph_seed,
+            "training_seed": training_seed,
+            "noise_seed": noise_seed,
+            "evaluation_seed": evaluation_seed,
+        },
+        "training_inputs": training_inputs,
+        "noise_inputs": noise_inputs,
+        "evaluation_inputs": evaluation_inputs,
+        "metric_directions": {
+            "pred_error": "lower-better",
+            "recon_accuracy": "higher-better",
+            "recall_accuracy": "higher-better",
+            "class_accuracy": "higher-better",
+            "recovery_score": "higher-better",
+        },
+        "rng_objects": {
+            "graph": graph_rng,
+            "training": training_rng,
+            "noise": noise_rng,
+            "evaluation": evaluation_rng,
+        },
+    }
 
 
 def _set_hrm_behavior(manifold: RecursiveCognitiveManifold, condition: str, seed: int):
@@ -235,6 +284,29 @@ def build_condition_manifold(condition: str, complex_, state_dim: int, seed: int
 
     _set_hrm_behavior(manifold, condition, seed)
     return manifold
+
+
+def validate_pairing_consistency(raw_metrics: Dict[str, List[float]], paired_results: Dict[str, Dict[str, float]], metric_name: str) -> bool:
+    """Check that raw-condition means and paired differences agree on the same direction."""
+    if not raw_metrics:
+        return False
+
+    paired_key = "full_vs_no_hrm_field"
+    if paired_key not in paired_results:
+        paired = next(iter(paired_results.values()), {})
+    else:
+        paired = paired_results[paired_key]
+
+    if paired.get("n_pairs", 0) <= 0:
+        return False
+
+    full_values = np.asarray(raw_metrics.get("full", []), dtype=float)
+    control_values = np.asarray(raw_metrics.get("no_hrm_field", []), dtype=float)
+    if full_values.size == 0 or control_values.size == 0:
+        return False
+
+    mean_diff = float(np.mean(full_values - control_values))
+    return abs(mean_diff - float(paired.get("mean_diff", 0.0))) < 1e-8
 
 
 def evaluate_hrm_validation(full_scores: np.ndarray, control_scores: np.ndarray, threshold: float = 0.05) -> Dict[str, float]:
@@ -687,6 +759,56 @@ class EnhancedAblationRun:
         return d
 
 
+def run_condition_suite(
+    conditions: List[str],
+    graph_size: int,
+    seed: int,
+    scenario: str,
+    n_steps: int,
+    state_dim: int,
+    condition_order: List[str] | None = None,
+) -> Dict[str, Dict[str, float]]:
+    """Run a suite of conditions using independent plans and randomized condition order."""
+    if condition_order is None:
+        condition_order = list(conditions)
+    else:
+        condition_order = list(condition_order)
+
+    rng = np.random.default_rng(seed + 500)
+    shuffled_order = list(condition_order)
+    if len(shuffled_order) > 1:
+        rng.shuffle(shuffled_order)
+
+    metrics_by_condition: Dict[str, Dict[str, float]] = {}
+    for condition in shuffled_order:
+        plan = build_experiment_plan(graph_size=graph_size, seed=seed, scenario=scenario, n_steps=n_steps, state_dim=state_dim)
+        complex_ = DynamicSimplicialComplex(plan["graph_vertices"], np.array([[0, 1, 2]], dtype=int))
+        manifold = build_condition_manifold(condition=condition, complex_=complex_, state_dim=state_dim, seed=seed)
+        cloned = clone_initial_checkpoint(manifold)
+        cloned.hrm_mode = condition
+        trial_inputs = plan["training_inputs"]
+        eval_inputs = plan["evaluation_inputs"]
+
+        for input_dict in trial_inputs:
+            cloned.step(input_dict)
+
+        pred_error = next_state_prediction_error(cloned, test_steps=16, seed=seed + 11)
+        recon_accuracy = corrupted_pattern_reconstruction(cloned, test_steps=16, seed=seed + 12)
+        recall_acc = recall_accuracy(cloned, test_steps=16, seed=seed + 13)
+        class_acc = classification_accuracy(cloned, test_steps=128, seed=seed + 14)
+        recovery_score = synchronization_recovery(cloned, test_steps=16, seed=seed + 15)
+
+        metrics_by_condition[condition] = {
+            "pred_error": pred_error,
+            "recon_accuracy": recon_accuracy,
+            "recall_accuracy": recall_acc,
+            "class_accuracy": class_acc,
+            "recovery_score": recovery_score,
+        }
+
+    return metrics_by_condition
+
+
 def run_enhanced_condition(
     condition: str,
     graph_id: str,
@@ -698,6 +820,7 @@ def run_enhanced_condition(
 ):
     """Run enhanced ablation with isolated checkpoints, pre-generated inputs, and HRM diagnostics."""
     resolved_seed = seed_everything(seed)
+    plan = build_experiment_plan(graph_size=len(complex_.vertices), seed=resolved_seed, scenario=scenario, n_steps=n_steps, state_dim=state_dim)
     base_manifold = build_condition_manifold(condition=condition, complex_=complex_, state_dim=state_dim, seed=resolved_seed)
     manifold = clone_initial_checkpoint(base_manifold)
 
@@ -732,13 +855,8 @@ def run_enhanced_condition(
 
         manifold.step = step_no_rewiring
 
-    inputs = generate_trial_inputs(
-        graph_size=len(manifold.nodes),
-        seed=resolved_seed + 1000,
-        scenario=scenario,
-        n_steps=n_steps,
-        state_dim=state_dim,
-    )
+    inputs = plan["training_inputs"]
+    evaluation_inputs = plan["evaluation_inputs"]
 
     state_norms = []
     confidences = []
@@ -757,11 +875,11 @@ def run_enhanced_condition(
 
     incidents = consolidate_collapse_events(collapse_flags, collapse_energies)
 
-    pred_error = next_state_prediction_error(manifold, test_steps=6, seed=resolved_seed + 1)
-    recon_accuracy = corrupted_pattern_reconstruction(manifold, test_steps=4, seed=resolved_seed + 2)
-    recall_acc = recall_accuracy(manifold, test_steps=5, seed=resolved_seed + 3)
-    class_acc = classification_accuracy(manifold, test_steps=5, seed=resolved_seed + 4)
-    recovery_score = synchronization_recovery(manifold, test_steps=5, seed=resolved_seed + 5)
+    pred_error = next_state_prediction_error(manifold, test_steps=32, seed=resolved_seed + 1)
+    recon_accuracy = corrupted_pattern_reconstruction(manifold, test_steps=32, seed=resolved_seed + 2)
+    recall_acc = recall_accuracy(manifold, test_steps=32, seed=resolved_seed + 3)
+    class_acc = classification_accuracy(manifold, test_steps=256, seed=resolved_seed + 4)
+    recovery_score = synchronization_recovery(manifold, test_steps=32, seed=resolved_seed + 5)
 
     guidance_result = guidance_task(manifold, n_steps=10)
     hrm_result = hrm_task(manifold, n_steps=10)
