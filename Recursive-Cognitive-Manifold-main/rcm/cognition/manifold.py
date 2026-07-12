@@ -5,6 +5,7 @@ import numpy as np
 from rcm.cognition.edge import CognitiveEdge
 from rcm.cognition.node import CognitiveNode
 from rcm.cognition.region import CognitiveRegion
+from rcm.dynamics.fields import LegacyFieldModel, NonlinearFieldModel
 from rcm.dynamics.plasticity import request_simplicial_surgery
 from rcm.dynamics.plasticity import state_similarity
 from rcm.dynamics.plasticity import update_edge_dynamics
@@ -12,20 +13,39 @@ from rcm.dynamics.propagation import propagate_states
 from rcm.dynamics.propagation import stimulate_node
 from rcm.dynamics.regional_hrm_field import RegionalHRMField
 from rcm.dynamics.regional_hrm_field import summarize_region_nodes
+from rcm.dynamics.state_engine import StateEngine, StateEngineConfig
 from rcm.dynamics.synchronization import apply_synchronization
 from rcm.dynamics.synchronization import coherence
 from rcm.hierarchy.abstraction import infer_specialization
 from rcm.hierarchy.abstraction import region_activation
 from rcm.hierarchy.child_manifold import refresh_child_manifolds
+from rcm.config.dynamics import StateDynamicsConfig
+from rcm.config.field import FieldConfig
+from rcm.config.representation import RepresentationConfig
+from rcm.config.stability import StabilityConfig
+from rcm.config.topology import TopologyConfig
 from rcm.memory.episodic import EpisodicMemory
 from rcm.memory.recall import combine_state_with_prediction
 from rcm.memory.semantic import SemanticMemory
 from rcm.memory.structural import StructuralMemory
-from rcm.state_engine import BoundedStateEngine, UnifiedStateConfig
+from rcm.metrics import ManifoldMetrics
+from rcm.representation import RepresentationController
+from rcm.stability import StabilityPolicy
 
 
 class RecursiveCognitiveManifold:
-    def __init__(self, state_dim: int = 4, level: int = 0, label: str = "node", hrm_seed: int | None = None):
+    def __init__(
+        self,
+        state_dim: int = 4,
+        level: int = 0,
+        label: str = "node",
+        hrm_seed: int | None = None,
+        dynamics_config: StateDynamicsConfig | None = None,
+        topology_config: TopologyConfig | None = None,
+        field_config: FieldConfig | None = None,
+        stability_config: StabilityConfig | None = None,
+        representation_config: RepresentationConfig | None = None,
+    ):
         self.state_dim = state_dim
         self.level = level
         self.label = label
@@ -38,14 +58,38 @@ class RecursiveCognitiveManifold:
         self.child_manifolds: list[RecursiveCognitiveManifold] = []
         if hrm_seed is None:
             hrm_seed = 1000 if level == 0 else 2000 + level
-        self.hrm_field = RegionalHRMField(seed=hrm_seed, state_dim=state_dim)
+        self.dynamics_config = dynamics_config or StateDynamicsConfig()
+        self.topology_config = topology_config or TopologyConfig()
+        self.field_config = field_config or FieldConfig()
+        field_model = self.field_config.field_model.lower()
+        if field_model == "nonlinear":
+            self.hrm_field = NonlinearFieldModel(seed=hrm_seed, state_dim=state_dim)
+        else:
+            self.hrm_field = LegacyFieldModel(seed=hrm_seed, state_dim=state_dim)
         self.last_child_field_metrics = []
         self.geometry_complex = None
         self.last_geometry_feedback = {}
         self.last_semantic_guidance = {}
-        self.unified_state_engine = BoundedStateEngine(config=UnifiedStateConfig(dt=0.05))
+        self.stability_config = stability_config or StabilityConfig()
+        self.representation_config = representation_config or RepresentationConfig()
+        self.metrics = ManifoldMetrics(task_score=0.0, recall_score=0.0, coherence=0.0, collapse_energy=0.0, topology_cost=0.0, representation_cost=0.0, field_energy=0.0)
+        self.unified_state_engine = StateEngine(config=StateEngineConfig())
+        self.representation_controller = RepresentationController(
+            current_dim=state_dim,
+            min_dim=self.representation_config.min_dim,
+            max_dim=self.representation_config.max_dim,
+            trial_duration=self.representation_config.trial_duration,
+            minimum_improvement=self.representation_config.minimum_improvement,
+            switch_cost=self.representation_config.switch_cost,
+            cooldown_steps=self.representation_config.cooldown_steps,
+        )
         self.unified_state_history = []
         self.time_step = 0
+        self.stability_controller = StabilityPolicy()
+        self.last_stability_report = {}
+        self._previous_state_signature = np.zeros(state_dim, dtype=float)
+        self._current_state_signature = np.zeros(state_dim, dtype=float)
+        self.collapse_energy = 0.0
 
     @classmethod
     def from_simplicial_complex(cls, complex_, state_dim: int = 4, hrm_seed: int | None = None):
@@ -98,8 +142,62 @@ class RecursiveCognitiveManifold:
         self._apply_child_manifold_fields()
         unified_result = self.unified_state_engine.step(self, external_input=external_input)
         self.unified_state_history.append(unified_result)
+        state_vector = np.asarray([node.local_state[0] if len(node.local_state) else 0.0 for node in self.nodes.values()], dtype=float)
+        self._previous_state_signature = self._current_state_signature.copy()
+        self._current_state_signature = self._state_signature()
+        proposal = self.representation_controller.propose(state_vector, objective=float(self.metrics.task_score), collapse_event=bool(getattr(self, "collapse_flag", False)), step=self.time_step)
+        tx_id = self.stability_controller.recovery.begin_transaction(
+            "representation",
+            {"target_dim": int(proposal.target_dim)},
+            self._snapshot_for_recovery(),
+            trial_metrics={"objective": float(self.metrics.task_score)},
+            post_change_metrics={"objective": float(self.metrics.task_score)},
+            accepted=False,
+        )
+        accepted, _, _ = self.representation_controller.evaluate(
+            proposal,
+            objective=float(self.metrics.task_score),
+            current_state=self.representation_controller.current_state,
+            step=self.time_step,
+        )
+        self.stability_controller.recovery.complete_transaction(
+            tx_id,
+            post_change_metrics={"accepted": bool(accepted), "objective": float(self.metrics.task_score)},
+            accepted=bool(accepted),
+        )
         self.time_step += 1
         snapshot = self.snapshot()
+        self.last_stability_report = self.stability_controller.evaluate(
+            self,
+            {
+                **self._snapshot_for_recovery(),
+                "field_metrics": getattr(self, "last_field_metrics", {}),
+                "state_signature": self._current_state_signature,
+                "previous_state_signature": self._previous_state_signature,
+                "collapse_energy": float(getattr(self, "collapse_energy", 0.0)),
+            },
+        )
+        self.collapse_energy = float(self.last_stability_report.get("collapse_energy", getattr(self, "collapse_energy", 0.0)))
+        self.collapse_flag = bool(self.last_stability_report.get("collapse_event", False))
+        self.metrics = ManifoldMetrics(
+            task_score=float(len(self.regions) + len(self.child_manifolds)),
+            recall_score=float(np.mean([node.confidence for node in self.nodes.values()]) if self.nodes else 0.0),
+            coherence=float(np.mean([node.synchronization_state for node in self.nodes.values()]) if self.nodes else 0.0),
+            collapse_energy=float(getattr(self, "collapse_energy", 0.0)),
+            topology_cost=float(len(self.edges)),
+            representation_cost=float(len(self.nodes) + len(self.regions)),
+            field_energy=float(getattr(self, "last_field_metrics", {}).get("field_energy", 0.0)),
+        )
+        snapshot["metrics"] = {
+            "task_score": self.metrics.task_score,
+            "recall_score": self.metrics.recall_score,
+            "coherence": self.metrics.coherence,
+            "collapse_energy": self.metrics.collapse_energy,
+            "topology_cost": self.metrics.topology_cost,
+            "representation_cost": self.metrics.representation_cost,
+            "field_energy": self.metrics.field_energy,
+        }
+        snapshot["metrics_object"] = self.metrics.__dict__
         snapshot["unified_state"] = {
             "state_vector": unified_result["state_vector"].tolist(),
             "bounded": unified_result["bounded"],
@@ -184,6 +282,31 @@ class RecursiveCognitiveManifold:
             self._update_regions()
         return applied
 
+    def _state_signature(self) -> np.ndarray:
+        if not self.nodes:
+            return np.zeros(self.state_dim, dtype=float)
+        signatures = []
+        for node in self.nodes.values():
+            state = np.asarray(node.local_state, dtype=float).reshape(-1)
+            signatures.append(state[: min(self.state_dim, state.size)])
+        if not signatures:
+            return np.zeros(self.state_dim, dtype=float)
+        return np.asarray(np.mean(np.stack(signatures, axis=0), axis=0), dtype=float).reshape(-1)
+
+    def _snapshot_for_recovery(self) -> dict:
+        return {
+            "level": self.level,
+            "label": self.label,
+            "time_step": self.time_step,
+            "state_signature": self._state_signature(),
+            "previous_state_signature": self._previous_state_signature.copy(),
+            "representation_dim": int(self.representation_controller.current_dim),
+            "state_vector": self._state_signature().tolist(),
+            "field_metrics": getattr(self, "last_field_metrics", {}),
+            "metrics": getattr(self, "metrics", None),
+            "collapse_energy": float(getattr(self, "collapse_energy", 0.0)),
+        }
+
     def snapshot(self):
         return {
             "level": self.level,
@@ -199,6 +322,7 @@ class RecursiveCognitiveManifold:
             "field_metrics": getattr(self, "last_field_metrics", {}),
             "child_field_metrics": getattr(self, "last_child_field_metrics", []),
             "geometry_feedback": getattr(self, "last_geometry_feedback", {}),
+            "metrics": getattr(self, "metrics", None),
         }
 
     def _record_topology_event(self, node_id: int, event: str):
@@ -323,7 +447,11 @@ class RecursiveCognitiveManifold:
             region.specialization = specialization
             region.node_ids = signature
             if region.hrm_field is None:
-                region.hrm_field = RegionalHRMField(seed=region.region_id, state_dim=self.state_dim)
+                field_model = self.field_config.field_model.lower()
+                if field_model == "nonlinear":
+                    region.hrm_field = NonlinearFieldModel(seed=region.region_id, state_dim=self.state_dim)
+                else:
+                    region.hrm_field = LegacyFieldModel(seed=region.region_id, state_dim=self.state_dim)
             region.activation_trace.append(region_activation(self, component))
             region.stability = coherence(region.activation_trace)
             regions[signature] = region

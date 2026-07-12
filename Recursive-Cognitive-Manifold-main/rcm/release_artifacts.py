@@ -40,6 +40,8 @@ def build_module_map() -> dict[str, list[str]]:
 
 
 def _json_safe(value: Any) -> Any:
+    if hasattr(value, "__dict__") and not isinstance(value, (dict, list, tuple, str, int, float, bool, type(None))):
+        return _json_safe(value.__dict__)
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

@@ -27,6 +27,17 @@ def main():
 
     failures = []
     metrics = baseline.get("metrics", {})
+    if not metrics:
+        metrics = {
+            "recall_quality": {"path": "baseline_metrics.recall_quality", "baseline": 0.0, "direction": "higher_is_better", "max_regression": 0.01},
+            "task_retention": {"path": "baseline_metrics.task_retention", "baseline": 0.0, "direction": "higher_is_better", "max_regression": 0.01},
+            "recovery_rate": {"path": "baseline_metrics.recovery_rate", "baseline": 0.0, "direction": "higher_is_better", "max_regression": 0.01},
+            "collapse_frequency": {"path": "baseline_metrics.collapse_frequency", "baseline": 0.0, "direction": "lower_is_better", "max_regression": 0.01},
+            "edge_count": {"path": "baseline_metrics.edge_count", "baseline": 0.0, "direction": "higher_is_better", "max_regression": 0.01},
+            "region_count": {"path": "baseline_metrics.region_count", "baseline": 0.0, "direction": "higher_is_better", "max_regression": 0.01},
+            "runtime": {"path": "baseline_metrics.runtime", "baseline": 0.0, "direction": "lower_is_better", "max_regression": 0.01},
+            "peak_memory": {"path": "baseline_metrics.peak_memory", "baseline": 0.0, "direction": "lower_is_better", "max_regression": 0.01},
+        }
     for label, spec in metrics.items():
         path = spec["path"]
         baseline_value = float(spec["baseline"])

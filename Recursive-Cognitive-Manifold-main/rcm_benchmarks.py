@@ -308,6 +308,19 @@ def statistical_confidence(factory, seed: int, n_trials: int = 6):
     return summary
 
 
+def _summarize_benchmark_metrics(benchmarks: dict):
+    return {
+        "recall_quality": benchmarks["recall_accuracy"]["state_similarity"],
+        "task_retention": benchmarks["hierarchy_utility"]["hierarchical_task_score"],
+        "recovery_rate": benchmarks["noise_recovery"]["error_reduction"],
+        "collapse_frequency": benchmarks["adversarial_regions"][-1]["global_step"] if benchmarks["adversarial_regions"] else 0,
+        "edge_count": benchmarks["topology_recovery"]["damaged_edge_ratio"],
+        "region_count": benchmarks["region_formation"]["region_count"],
+        "runtime": benchmarks["computational_cost"]["mean_step_seconds"],
+        "peak_memory": benchmarks["computational_cost"]["peak_memory_bytes"],
+    }
+
+
 def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
     stimulus_a = np.array([1.0, 0.1, 0.0, 0.0], dtype=float)
     stimulus_b = np.array([0.0, 0.0, 1.0, 0.1], dtype=float)
@@ -407,6 +420,7 @@ def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
         "adversarial_regions": adversarial_runner.run(),
     }
 
+    metrics = _summarize_benchmark_metrics(benchmarks)
     metadata = {
         "seed": int(seed),
     }
@@ -416,6 +430,7 @@ def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
     return {
         "metadata": metadata,
         "benchmarks": benchmarks,
+        "baseline_metrics": metrics,
     }
 
 
