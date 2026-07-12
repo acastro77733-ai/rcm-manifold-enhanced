@@ -21,6 +21,7 @@ from rcm.memory.episodic import EpisodicMemory
 from rcm.memory.recall import combine_state_with_prediction
 from rcm.memory.semantic import SemanticMemory
 from rcm.memory.structural import StructuralMemory
+from rcm.state_engine import BoundedStateEngine, UnifiedStateConfig
 
 
 class RecursiveCognitiveManifold:
@@ -42,6 +43,8 @@ class RecursiveCognitiveManifold:
         self.geometry_complex = None
         self.last_geometry_feedback = {}
         self.last_semantic_guidance = {}
+        self.unified_state_engine = BoundedStateEngine(config=UnifiedStateConfig(dt=0.05))
+        self.unified_state_history = []
         self.time_step = 0
 
     @classmethod
@@ -93,8 +96,24 @@ class RecursiveCognitiveManifold:
         self.semantic_memory.observe(self)
         refresh_child_manifolds(self)
         self._apply_child_manifold_fields()
+        unified_result = self.unified_state_engine.step(self, external_input=external_input)
+        self.unified_state_history.append(unified_result)
         self.time_step += 1
-        return self.snapshot()
+        snapshot = self.snapshot()
+        snapshot["unified_state"] = {
+            "state_vector": unified_result["state_vector"].tolist(),
+            "bounded": unified_result["bounded"],
+            "block_names": unified_result["block_names"],
+        }
+        snapshot["unified_metrics"] = {
+            "state_norm": float(np.linalg.norm(unified_result["state_vector"])),
+            "contribution_count": len(unified_result["contributions"]),
+        }
+        snapshot["unified_contributions"] = [
+            {"term": entry["term"], "norm": float(np.linalg.norm(np.asarray(entry["value"], dtype=float)))}
+            for entry in unified_result["contributions"]
+        ]
+        return snapshot
 
     def attempt_topology_repair(
         self,
