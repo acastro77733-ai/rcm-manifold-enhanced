@@ -13,7 +13,13 @@ def infer_specialization(manifold, component):
 
 
 def region_activation(manifold, component):
-    return np.mean([manifold.nodes[node_id].local_state for node_id in component], axis=0)
+    states = np.vstack([manifold.nodes[node_id].local_state for node_id in component])
+    weights = np.asarray(
+        [max(0.05, manifold.nodes[node_id].confidence) * max(0.1, manifold.nodes[node_id].energy) for node_id in component],
+        dtype=float,
+    )
+    weights = weights / max(float(np.sum(weights)), 1e-12)
+    return np.sum(states * weights[:, None], axis=0)
 
 
 def cross_region_coupling(manifold, left, right):
@@ -45,6 +51,8 @@ def abstract_regions(manifold, stable_regions):
         meta.add_node(meta_id, state)
         meta.nodes[meta_id].specialization = region.specialization
         meta.nodes[meta_id].confidence = region.stability
+        meta.nodes[meta_id].energy = float(np.mean([manifold.nodes[node_id].energy for node_id in signature])) if signature else 0.0
+        meta.nodes[meta_id].synchronization_state = float(region.stability)
         region_to_meta[signature] = meta_id
         meta.parent_region_map[meta_id] = signature
 

@@ -10,6 +10,11 @@ import tracemalloc
 import numpy as np
 
 import rcm.cognition.manifold as manifold_module
+from rcm.experiments.forecasting import build_dataset_split
+from rcm.experiments.forecasting import build_forecast_model
+from rcm.experiments.forecasting import describe_model_mechanisms
+from rcm.experiments.forecasting import evaluate_forecast_model
+from rcm.experiments.multi_seed_evaluation import run_paired_multi_seed_evaluation
 from rcm.reproducibility import seed_everything
 from rcm_perturbation_testing import NoiseType
 from rcm_perturbation_testing import RCMPerturbationLab
@@ -399,6 +404,7 @@ def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
         "memory_retention": memory_retention(factory, seed, stimulus_a, 0, 4, 12),
         "multi_scale_performance": multi_scale_performance(factory, seed),
         "statistical_confidence": statistical_confidence(factory, seed),
+        "forecast_contract": forecast_contract_benchmark(seed),
         "recall_accuracy": recall_accuracy(factory, seed, cue, stimulus_a),
         "adaptation_speed": adaptation_speed(factory, seed, stimulus_a, threshold=0.95, max_steps=20),
         "catastrophic_interference": catastrophic_interference(factory, seed, stimulus_a, stimulus_b),
@@ -416,6 +422,15 @@ def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
         "topology_recovery": topology_recovery(factory, seed, remove_fraction=0.25, recovery_steps=20),
         "computational_cost": computational_cost(factory, seed, steps=100),
         "ablation_sensitivity": ablation_sensitivity(factory, seed, ablation_task),
+        "paired_seed_ablation": run_paired_multi_seed_evaluation(
+            task_name="temporal_forecasting",
+            seed_start=seed,
+            n_seeds=4,
+            graph_size=4,
+            state_dim=4,
+            primary_condition="full_rcm",
+            control_conditions=["no_hrm", "no_hierarchy", "fixed_topology", "memory_only"],
+        ),
         "geometry_feedback_gain": geometry_feedback_gain(factory, seed, geometry_feedback_task),
         "adversarial_regions": adversarial_runner.run(),
     }
@@ -466,37 +481,43 @@ def computational_cost(factory, seed: int, steps: int = 100):
 
 
 def _disable_semantic_hierarchy(manifold):
-    manifold.semantic_memory.observe = lambda current_manifold: None
-    original_refresh = manifold_module.refresh_child_manifolds
-    manifold_module.refresh_child_manifolds = lambda current_manifold: current_manifold.child_manifolds.clear()
-    return lambda: setattr(manifold_module, "refresh_child_manifolds", original_refresh)
+    manifold.semantic_guidance_enabled = False
+    manifold.hierarchy_enabled = False
+    return lambda: None
 
 
 def _disable_structural(manifold):
-    original_update = manifold_module.update_edge_dynamics
-    manifold_module.update_edge_dynamics = lambda current_manifold, edge_usage: []
-    return lambda: setattr(manifold_module, "update_edge_dynamics", original_update)
+    manifold.structural_plasticity_enabled = False
+    return lambda: None
 
 
 def _disable_episodic(manifold):
-    manifold._apply_episodic_recall = lambda updated_states: updated_states
-    manifold.episodic_memory.record = lambda nodes, time_step: None
+    manifold.episodic_recall_enabled = False
     return lambda: None
 
 
 def _disable_geometry_feedback(manifold):
-    manifold._apply_geometry_feedback = lambda edge_usage: setattr(
-        manifold,
-        "last_geometry_feedback",
-        {
-            "enabled": False,
-            "surgery_requests": [],
-            "surgery_attempted": [],
-            "surgery_applied": [],
-            "laplacian_energy": 0.0,
-        },
-    )
+    manifold.geometry_feedback_enabled = False
     return lambda: None
+
+
+def forecast_contract_benchmark(seed: int, task_name: str = "temporal_forecasting", graph_size: int = 4, state_dim: int = 4):
+    split = build_dataset_split(task_name, graph_size=graph_size, seed=seed, state_dim=state_dim)
+    conditions = ("full_rcm", "no_guidance", "no_hrm", "fixed_topology", "no_hierarchy", "memory_only", "fixed_graph_control")
+    report = {
+        "task": task_name,
+        "dataset_seeds": dict(split.seeds),
+        "conditions": {},
+    }
+    for condition in conditions:
+        model = build_forecast_model(condition, seed=seed, graph_size=graph_size, state_dim=state_dim)
+        evaluation = evaluate_forecast_model(model, split)
+        report["conditions"][condition] = {
+            "mechanisms": describe_model_mechanisms(model),
+            "validation_mean_error": float(evaluation["validation_mean_error"]),
+            "test_mean_error": float(evaluation["test_mean_error"]),
+        }
+    return report
 
 
 def geometry_feedback_gain(factory, seed: int, score_fn):

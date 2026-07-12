@@ -66,6 +66,23 @@ This writes:
 
 The release manifest includes a tagged baseline release record, a public-vs-experimental module map, dependency and platform metadata, and a serialized reference snapshot for regression checks.
 
+### Evaluation Artifacts
+
+The repository now also emits evaluation artifacts for the governed HRM/RCM forecast pathway and paired ablation analysis:
+
+- artifacts/releases/primary_multi_seed_report.json
+- artifacts/releases/hrm_experiment_manifest.json
+- artifacts/releases/baseline_assessment.json
+
+These files capture the 30-seed paired primary evaluation, the machine-readable forecast/evaluation contract, and a plain-language baseline assessment of implementation status, causal pathway activation, task benefit, statistical validation, and remaining limitations.
+
+To rerun the main evaluation and refresh the release bundle:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m rcm.experiments.primary_evaluation --task temporal_forecasting --seed-start 0 --n-seeds 30 --graph-size 4 --state-dim 4 --output artifacts/releases/primary_multi_seed_report.json
+PYTHONDONTWRITEBYTECODE=1 python -m rcm.experiments.benchmark_suite --seed 42 --output artifacts/benchmarks/benchmark_report_seed_42.json
+```
+
 ## CI-Friendly Test Commands
 
 These commands are safe for headless CI runs and avoid polluting the repository with bytecode.

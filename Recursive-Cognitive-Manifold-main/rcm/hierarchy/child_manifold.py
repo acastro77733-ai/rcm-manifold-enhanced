@@ -1,4 +1,5 @@
 from rcm.hierarchy.abstraction import abstract_regions
+import numpy as np
 
 
 def _signature_to_meta_id(child_manifold):
@@ -48,6 +49,30 @@ def _merge_child_state(previous_child, next_child):
     next_child.time_step = previous_child.time_step
 
 
+def _update_hierarchy_constraints(child_manifold):
+    hierarchy_forecasts = {}
+    parent_constraints = {}
+    for meta_id, node in child_manifold.nodes.items():
+        neighbor_states = []
+        weights = []
+        for (source, target), edge in child_manifold.edges.items():
+            if source != meta_id or target not in child_manifold.nodes:
+                continue
+            neighbor_states.append(np.asarray(child_manifold.nodes[target].local_state, dtype=float))
+            weights.append(max(0.0, float(edge.strength)) * (1.0 + float(getattr(edge, "resonance", 0.0))))
+        if neighbor_states and np.sum(weights) > 0.0:
+            weighted_neighbors = np.average(np.stack(neighbor_states, axis=0), axis=0, weights=np.asarray(weights, dtype=float))
+        else:
+            weighted_neighbors = np.asarray(node.local_state, dtype=float)
+        forecast = 0.65 * np.asarray(node.local_state, dtype=float) + 0.35 * weighted_neighbors
+        hierarchy_forecasts[meta_id] = forecast
+        signature = child_manifold.parent_region_map.get(meta_id)
+        if signature is not None:
+            parent_constraints[signature] = forecast
+    child_manifold.hierarchy_forecasts = hierarchy_forecasts
+    child_manifold.parent_constraints = parent_constraints
+
+
 def refresh_child_manifolds(manifold):
     stable_regions = [
         signature
@@ -62,5 +87,6 @@ def refresh_child_manifolds(manifold):
             manifold.child_manifolds[0] = abstracted
         else:
             manifold.child_manifolds.append(abstracted)
+        _update_hierarchy_constraints(manifold.child_manifolds[0])
     else:
         manifold.child_manifolds.clear()

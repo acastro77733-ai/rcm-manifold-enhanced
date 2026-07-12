@@ -58,6 +58,43 @@ jobs:
         run: |
           python scripts/ci/compare_benchmark_baseline.py
 
+      - name: Primary evaluation smoke
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python -m rcm.experiments.primary_evaluation --task temporal_forecasting --seed-start 0 --n-seeds 6 --graph-size 4 --state-dim 4 --output artifacts/releases/ci_primary_multi_seed_report.json
+
+      - name: Verify primary evaluation artifact
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path('artifacts/releases/ci_primary_multi_seed_report.json')
+          report = json.loads(report_path.read_text(encoding='utf-8'))
+          assert report['manifest']['n_seeds'] == 6, 'Primary evaluation seed count mismatch'
+          assert 'comparisons' in report and report['comparisons'], 'Missing paired comparisons'
+          first = next(iter(report['comparisons'].values()))
+          assert 'corrected_p_value' in first, 'Missing multiple-comparison correction output'
+          print('Primary evaluation artifact validation passed.')
+          PY
+
+      - name: Release artifact validation
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+          from pathlib import Path
+          from rcm.release_artifacts import write_release_artifacts
+
+          output_dir = Path('artifacts/releases')
+          write_release_artifacts(output_dir=output_dir, tag='ci-baseline')
+          required = [
+              output_dir / 'baseline_release.json',
+              output_dir / 'hrm_experiment_manifest.json',
+              output_dir / 'baseline_assessment.json',
+          ]
+          for path in required:
+              assert path.exists(), f'Missing release artifact: {path}'
+          print('Release artifact validation passed.')
+          PY
+
       - name: Demo smoke test
         run: |
           PYTHONDONTWRITEBYTECODE=1 python demo_driver.py --seed 42 --output artifacts/ci_demo.png

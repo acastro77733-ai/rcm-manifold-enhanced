@@ -67,6 +67,24 @@ class ActiveHierarchyTests(unittest.TestCase):
         self.assertTrue(manifold.last_child_field_metrics)
         self.assertIn("coupling_pressure", manifold.last_child_field_metrics[0])
 
+    def test_child_forecast_constraints_change_parent_states(self):
+        manifold = self._build_two_region_manifold()
+        child = manifold.child_manifolds[0]
+
+        parent_regions = sorted(manifold.regions.keys())
+        inverse_map = {tuple(sorted(signature)): meta_id for meta_id, signature in child.parent_region_map.items()}
+        meta_id = inverse_map[tuple(sorted(parent_regions[0]))]
+        child.nodes[meta_id].local_state = np.asarray([0.2, 0.8, 0.4, 0.1], dtype=float)
+        child.parent_constraints[parent_regions[0]] = np.asarray([0.5, 0.7, 0.3, 0.2], dtype=float)
+
+        before = manifold.nodes[parent_regions[0][0]].local_state.copy()
+        manifold._apply_child_manifold_fields()
+        after = manifold.nodes[parent_regions[0][0]].local_state.copy()
+
+        self.assertGreater(np.linalg.norm(after - before), 0.0)
+        self.assertIn("constraint_norm", manifold.last_child_field_metrics[0])
+        self.assertIn("forecast_error", manifold.last_child_field_metrics[0])
+
 
 if __name__ == "__main__":
     unittest.main()

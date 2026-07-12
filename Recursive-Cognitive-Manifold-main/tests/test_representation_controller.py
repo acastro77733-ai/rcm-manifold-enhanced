@@ -27,9 +27,38 @@ class RepresentationControllerTests(unittest.TestCase):
     def test_contract_and_rollback_are_supported(self):
         controller = RepresentationController(adapter=IdentityAdapter(), current_dim=4, min_dim=2, max_dim=8)
         state = np.array([0.1, 0.2, 0.3, 0.4], dtype=float)
-        proposal = controller.propose(state, objective=0.5, step=15)
+        proposal = controller.propose(
+            state,
+            objective=0.5,
+            step=15,
+            runtime_signals={
+                "prediction_residual": 0.05,
+                "uncertainty": 0.02,
+                "geometric_stress": 0.01,
+                "stability_penalty": 0.4,
+                "marginal_improvement": 0.0,
+                "available_budget_dim": 3,
+            },
+        )
         self.assertEqual(proposal.proposal_type, ProposalType.CONTRACT)
         self.assertLess(proposal.target_dim, 4)
+
+    def test_runtime_signals_can_drive_expansion_even_without_high_objective(self):
+        controller = RepresentationController(adapter=IdentityAdapter(), current_dim=4, min_dim=2, max_dim=8)
+        state = np.array([0.1, 0.2, 0.3, 0.4], dtype=float)
+        proposal = controller.propose(
+            state,
+            objective=0.45,
+            step=20,
+            runtime_signals={
+                "prediction_residual": 0.7,
+                "uncertainty": 0.5,
+                "geometric_stress": 0.4,
+                "marginal_improvement": 0.2,
+                "available_budget_dim": 8,
+            },
+        )
+        self.assertEqual(proposal.proposal_type, ProposalType.EXPAND)
 
 
 if __name__ == "__main__":

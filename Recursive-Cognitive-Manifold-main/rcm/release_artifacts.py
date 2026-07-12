@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from rcm.cognition.manifold import RecursiveCognitiveManifold
+from rcm.experiments.multi_seed_evaluation import build_experiment_manifest
 from rcm.reproducibility import seed_everything
 
 
@@ -112,7 +113,24 @@ def write_release_artifacts(output_dir: str | Path | None = None, tag: str = "v0
 
     module_map = build_module_map()
     environment_report = capture_environment_report()
+    experiment_manifest = build_experiment_manifest(
+        task_name="temporal_forecasting",
+        n_seeds=30,
+        primary_condition="full_rcm",
+        control_conditions=["no_hrm", "no_hierarchy", "fixed_topology", "memory_only", "linear_autoregression"],
+    )
+    assessment = {
+        "operational_implementation": "Governed state, field controls, hierarchy feedback, topology transactions, forecasting contract, and paired evaluation harness are implemented.",
+        "causal_mechanism_activation": "RCM/HRM, no-guidance, no-HRM, fixed-topology, no-hierarchy, memory-only, and fixed-graph controls map to explicit runtime pathway toggles or field modes.",
+        "task_benefit": "Benefit is measured through forecast errors, paired deltas, and compute-normalized summaries, but the full 30-seed primary study has not been executed in release generation.",
+        "statistical_validation": "Bootstrap confidence intervals and paired effect sizes are emitted by the multi-seed harness.",
+        "unresolved_limitations": "Numerical convergence and precision tests are present, but CI regression gates and a full production-scale experiment run still need to be wired into release automation.",
+    }
     lock_path = _write_dependency_lock(output_dir, environment_report["dependencies"])
+    manifest_path = output_dir / "hrm_experiment_manifest.json"
+    manifest_path.write_text(json.dumps(experiment_manifest, indent=2, sort_keys=True) + "\n", encoding="ascii")
+    assessment_path = output_dir / "baseline_assessment.json"
+    assessment_path.write_text(json.dumps(assessment, indent=2, sort_keys=True) + "\n", encoding="ascii")
     manifest = {
         "release": {
             "tag": tag,
@@ -123,10 +141,17 @@ def write_release_artifacts(output_dir: str | Path | None = None, tag: str = "v0
             "module_map": "module_map.json",
             "environment_report": "environment_report.json",
             "dependency_lock": lock_path.name,
+            "experiment_manifest": manifest_path.name,
+            "baseline_assessment": assessment_path.name,
         },
         "module_map": module_map,
         "environment": environment_report,
+        "assessment": assessment,
     }
+
+    primary_report_path = output_dir / "primary_multi_seed_report.json"
+    if primary_report_path.exists():
+        manifest["artifacts"]["primary_multi_seed_report"] = primary_report_path.name
 
     (output_dir / "module_map.json").write_text(json.dumps(module_map, indent=2, sort_keys=True) + "\n", encoding="ascii")
     (output_dir / "environment_report.json").write_text(json.dumps(environment_report, indent=2, sort_keys=True) + "\n", encoding="ascii")

@@ -103,6 +103,8 @@ def test_full_and_no_hrm_conditions_diverge_on_cloned_manifolds():
     no_hrm.add_node(3, np.array([-0.2, 0.7, 0.1, 0.3]))
     no_hrm.connect(2, 3, strength=0.7, latency=1.0)
 
+    full._update_regions()
+    no_hrm._update_regions()
     full._apply_regional_fields()
     no_hrm._apply_regional_fields()
 

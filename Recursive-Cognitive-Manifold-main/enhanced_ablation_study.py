@@ -166,75 +166,23 @@ def build_experiment_plan(graph_size: int, seed: int, scenario: str, n_steps: in
 
 
 def _set_hrm_behavior(manifold: RecursiveCognitiveManifold, condition: str, seed: int):
-    """Attach condition-specific field update behavior directly to the manifold instance."""
+    """Configure condition-specific field modes on the runtime field equation."""
     manifold.hrm_mode = condition
-
-    def _apply_hrm_update(self, mode: str):
-        nodes = list(self.nodes.values())
-        if not nodes:
-            self.last_field_metrics = {
-                "regional_field_updates": 0,
-                "manifold_field_updates": 0,
-                "field_energy": 0.0,
-                "synchronization_pressure": 0.0,
-                "state_influence": 0.0,
-                "gradient_norm": 0.0,
-                "mode": mode,
-            }
-            return
-
-        summary = np.mean([node.local_state for node in nodes], axis=0)
-        if mode == "identity_field":
-            modulation = np.ones_like(summary)
-        elif mode == "randomized_field":
-            modulation = np.random.default_rng(seed + self.time_step).normal(0.0, 1.0, size=summary.shape)
-        elif mode == "fixed_parameter":
-            modulation = np.linspace(0.2, 0.8, len(summary), dtype=float)
-        else:
-            modulation = np.tanh(summary + 0.03 * np.mean([node.confidence for node in nodes]))
-
-        total_influence = 0.0
-        for node in nodes:
-            width = min(len(node.local_state), len(modulation))
-            delta = 0.004 * modulation[:width]
-            node.local_state[:width] += delta
-            node.energy += 0.001 * float(np.linalg.norm(delta))
-            total_influence += float(np.linalg.norm(delta))
-
-        field_energy = float(np.linalg.norm(modulation))
-        synchronization_pressure = float(np.clip(np.mean([node.confidence for node in nodes]), 0.0, 1.0))
-        gradient_norm = float(np.linalg.norm(modulation - np.mean(modulation)))
-        self.last_field_metrics = {
-            "regional_field_updates": 1,
-            "manifold_field_updates": 1,
-            "field_energy": field_energy,
-            "synchronization_pressure": synchronization_pressure,
-            "state_influence": total_influence,
-            "gradient_norm": gradient_norm,
-            "mode": mode,
-        }
-
-    def _apply_no_hrm(self):
-        self.last_field_metrics = {
-            "regional_field_updates": 0,
-            "manifold_field_updates": 0,
-            "field_energy": 0.0,
-            "synchronization_pressure": 0.0,
-            "state_influence": 0.0,
-            "gradient_norm": 0.0,
-            "mode": condition,
-        }
-
-    if condition == "no_hrm_field":
-        manifold._apply_regional_fields = types.MethodType(lambda self: _apply_no_hrm(self), manifold)
-        manifold._apply_manifold_field = types.MethodType(lambda self: _apply_no_hrm(self), manifold)
-    elif condition in {"identity_field", "randomized_field", "fixed_parameter", "full"}:
-        mode = condition if condition != "full" else "full"
-        manifold._apply_regional_fields = types.MethodType(lambda self: _apply_hrm_update(self, mode), manifold)
-        manifold._apply_manifold_field = types.MethodType(lambda self: _apply_hrm_update(self, mode), manifold)
-    else:
-        manifold._apply_regional_fields = types.MethodType(lambda self: _apply_hrm_update(self, "full"), manifold)
-        manifold._apply_manifold_field = types.MethodType(lambda self: _apply_hrm_update(self, "full"), manifold)
+    condition_to_mode = {
+        "full": "full",
+        "no_hrm_field": "no_field",
+        "identity_field": "identity_field",
+        "randomized_field": "randomized_field",
+        "diffusion_only": "diffusion_only",
+        "fixed_parameter": "frozen_parameter_field",
+        "linearized_field": "linearized_field",
+    }
+    manifold.field_config.field_model = "nonlinear"
+    manifold.field_config.control_mode = condition_to_mode.get(condition, "full")
+    manifold.hrm_field.control_mode = manifold.field_config.control_mode
+    manifold.hrm_field.seed = seed
+    if hasattr(manifold.hrm_field, "rng"):
+        manifold.hrm_field.rng = np.random.default_rng(seed)
 
 
 def clone_initial_checkpoint(manifold: RecursiveCognitiveManifold) -> RecursiveCognitiveManifold:
@@ -244,6 +192,7 @@ def clone_initial_checkpoint(manifold: RecursiveCognitiveManifold) -> RecursiveC
         level=manifold.level,
         label=manifold.label,
         hrm_seed=getattr(manifold.hrm_field, "seed", 0),
+        field_config=copy.deepcopy(manifold.field_config),
     )
     checkpoint.geometry_complex = manifold.geometry_complex
     checkpoint.time_step = 0
