@@ -49,6 +49,23 @@ python -m rcm.experiments.benchmark_suite --seed 42 --include-timestamp
 
 Performance metrics (latency and memory) may vary by hardware and runtime environment; correctness metrics should remain stable under fixed seeds.
 
+### Release and Reference Artifacts
+
+Every benchmark run can emit a tagged release manifest and serialized reference state snapshots:
+
+```bash
+python -m rcm.experiments.benchmark_suite --seed 42 --output artifacts/benchmarks/benchmark_report_seed_42.json
+```
+
+This writes:
+
+- artifacts/releases/baseline_release.json
+- artifacts/releases/reference_snapshots/baseline_snapshot.json
+- artifacts/releases/module_map.json
+- artifacts/releases/environment_report.json
+
+The release manifest includes a tagged baseline release record, a public-vs-experimental module map, dependency and platform metadata, and a serialized reference snapshot for regression checks.
+
 ## CI-Friendly Test Commands
 
 These commands are safe for headless CI runs and avoid polluting the repository with bytecode.

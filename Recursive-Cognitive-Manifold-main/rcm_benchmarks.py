@@ -241,6 +241,18 @@ def topology_recovery(factory, seed: int, remove_fraction: float = 0.25, recover
     }
 
 
+def _bootstrap_confidence_interval(values, n_boot: int = 200, seed: int = 0):
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        return [0.0, 0.0]
+    rng = np.random.default_rng(seed)
+    bootstraps = []
+    for _ in range(n_boot):
+        sample = rng.choice(values, size=values.size, replace=True)
+        bootstraps.append(float(np.mean(sample)))
+    return [float(np.percentile(bootstraps, 2.5)), float(np.percentile(bootstraps, 97.5))]
+
+
 def _to_json_safe(value):
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -251,6 +263,49 @@ def _to_json_safe(value):
     if isinstance(value, (list, tuple)):
         return [_to_json_safe(item) for item in value]
     return value
+
+
+def multi_scale_performance(factory, seed: int):
+    scales = {
+        "small": 20,
+        "medium": 60,
+        "large": 140,
+    }
+    results = {}
+    for label, steps in scales.items():
+        manifold = _instantiate_manifold(factory, seed)
+        latencies = []
+        for _ in range(steps):
+            tick = time.perf_counter()
+            manifold.step()
+            latencies.append(time.perf_counter() - tick)
+        results[label] = {
+            "steps": steps,
+            "mean_step_seconds": float(np.mean(latencies)) if latencies else 0.0,
+            "p95_step_seconds": float(np.percentile(latencies, 95)) if latencies else 0.0,
+            "steps_per_second": steps / max(sum(latencies), 1e-12),
+        }
+    return results
+
+
+def statistical_confidence(factory, seed: int, n_trials: int = 6):
+    cue = np.array([0.8, 0.1, 0.0, 0.0], dtype=float)
+    stimulus = np.array([1.0, 0.1, 0.0, 0.0], dtype=float)
+    metrics = {
+        "recall_similarity": lambda trial_seed: recall_accuracy(factory, trial_seed, cue, stimulus)["state_similarity"],
+        "adaptation_final_similarity": lambda trial_seed: adaptation_speed(factory, trial_seed, stimulus, threshold=0.95, max_steps=20)["final_similarity"],
+        "topology_restoration": lambda trial_seed: topology_recovery(factory, trial_seed, remove_fraction=0.25, recovery_steps=20)["restored_edge_ratio"],
+    }
+    summary = {}
+    for label, metric_fn in metrics.items():
+        values = [metric_fn(seed + offset) for offset in range(n_trials)]
+        lo, hi = _bootstrap_confidence_interval(values, n_boot=200, seed=seed)
+        summary[label] = {
+            "mean": float(np.mean(values)),
+            "ci95": [lo, hi],
+            "trials": values,
+        }
+    return summary
 
 
 def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
@@ -329,6 +384,8 @@ def run_benchmark_suite(factory, seed: int, include_timestamp: bool = False):
 
     benchmarks = {
         "memory_retention": memory_retention(factory, seed, stimulus_a, 0, 4, 12),
+        "multi_scale_performance": multi_scale_performance(factory, seed),
+        "statistical_confidence": statistical_confidence(factory, seed),
         "recall_accuracy": recall_accuracy(factory, seed, cue, stimulus_a),
         "adaptation_speed": adaptation_speed(factory, seed, stimulus_a, threshold=0.95, max_steps=20),
         "catastrophic_interference": catastrophic_interference(factory, seed, stimulus_a, stimulus_b),

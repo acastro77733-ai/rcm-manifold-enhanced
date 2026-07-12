@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 from rcm.experiments.specialization_demo import build_demo_manifold
+from rcm.release_artifacts import write_release_artifacts
 from rcm.reproducibility import normalize_seed
 from rcm.reproducibility import seed_everything
 from rcm_benchmarks import run_benchmark_suite
@@ -40,7 +41,9 @@ def main():
     output_path = args.output or default_output_path(resolved_seed)
     report = run_benchmark_suite(manifold_factory, seed=resolved_seed, include_timestamp=args.include_timestamp)
     written_path = write_benchmark_report(report, output_path)
+    release_manifest = write_release_artifacts(output_dir=Path("artifacts/releases"), tag=f"v0.1.0-seed-{resolved_seed}")
     print(f"Wrote benchmark report to {written_path}")
+    print(f"Wrote release artifacts to {release_manifest['artifacts']['reference_snapshot']}")
     print(f"Topology recovery restored edge ratio: {report['benchmarks']['topology_recovery']['restored_edge_ratio']:.3f}")
 
 
