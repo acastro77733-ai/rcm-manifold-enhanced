@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile validation
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python -m compileall Foundation demo_driver.py rcm rcm_benchmarks.py rcm_collapse_integration.py rcm_persistence.py rcm_perturbation_testing.py regional_hrm_field.py
+
+      - name: Unit tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Benchmark suite
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python -m rcm.experiments.benchmark_suite --seed 42 --output artifacts/benchmarks/ci_benchmark_report.json
+
+      - name: Verify benchmark metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path('artifacts/benchmarks/ci_benchmark_report.json')
+          report = json.loads(report_path.read_text(encoding='ascii'))
+          assert report['metadata']['seed'] == 42, 'Benchmark seed metadata mismatch'
+          assert 'generated_at' not in report['metadata'], 'Report should be deterministic by default'
+          assert 'benchmarks' in report and isinstance(report['benchmarks'], dict), 'Benchmark payload missing'
+          print('Benchmark metadata validation passed.')
+          PY
+
+      - name: Compare against stored benchmark baseline
+        run: |
+          python scripts/ci/compare_benchmark_baseline.py
+
+      - name: Demo smoke test
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python demo_driver.py --seed 42 --output artifacts/ci_demo.png

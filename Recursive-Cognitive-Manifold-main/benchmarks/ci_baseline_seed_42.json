@@ -1,0 +1,29 @@
+{
+  "seed": 42,
+  "metrics": {
+    "Recall Accuracy": {
+      "path": "benchmarks.recall_accuracy.state_similarity",
+      "baseline": 0.9991809850666445,
+      "max_regression": 0.05,
+      "direction": "higher_is_better"
+    },
+    "Memory Retention": {
+      "path": "benchmarks.memory_retention.state_similarity",
+      "baseline": 0.9928985706856518,
+      "max_regression": 0.05,
+      "direction": "higher_is_better"
+    },
+    "Adaptation Final Similarity": {
+      "path": "benchmarks.adaptation_speed.final_similarity",
+      "baseline": 0.9984938653805467,
+      "max_regression": 0.05,
+      "direction": "higher_is_better"
+    },
+    "Topology Restored Edge Ratio": {
+      "path": "benchmarks.topology_recovery.restored_edge_ratio",
+      "baseline": 1.0,
+      "max_regression": 0.05,
+      "direction": "higher_is_better"
+    }
+  }
+}
